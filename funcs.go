@@ -48,26 +48,47 @@ func collectDataSan(array Switch) {
 			return
 		}
 	}
-	data, err := runCommand(connection, "switchshow")
-	if err != nil {
-		logError(err.Error())
-	}
-	nameData, err := runCommand(connection, "switchshow -portname")
-	if err != nil {
-		logError(err.Error())
-	}
-	fwData, err := runCommand(connection, "version")
-	if err != nil {
-		logError(err.Error())
+	var data, nameData, fwData []byte
+	if array.Fid == "0" {
+		data, err = runCommand(connection, "switchshow")
+		if err != nil {
+			logError(err.Error())
+		}
+		nameData, err = runCommand(connection, "switchshow -portname")
+		if err != nil {
+			logError(err.Error())
+		}
+		fwData, err = runCommand(connection, "version")
+		if err != nil {
+			logError(err.Error())
+		}
+	} else {
+		command1 := "fosexec --fid " + array.Fid + " -cmd \"switchshow\""
+		data, err = runCommand(connection, command1)
+		if err != nil {
+			logError(err.Error())
+		}
+		command2 := "fosexec --fid " + array.Fid + " -cmd \"switchshow -portname\""
+		nameData, err = runCommand(connection, command2)
+		if err != nil {
+			logError(err.Error())
+		}
+		command3 := "fosexec --fid " + array.Fid + " -cmd \"version\""
+		fwData, err = runCommand(connection, command3)
+		if err != nil {
+			logError(err.Error())
+		}
 	}
 	defer connection.Close()
-	parseDataSan(data, nameData, fwData, array)
-	// var poolData Pools
-	// poolData, err = parseData(data, fw, array.Model, array.Name, array.Site, array.Type, client)
-	// if err != nil {
-	// 	logError(err.Error())
-	// }
-	// pools.Pools = append(pools.Pools, poolData.Pools...)
+	ports, err := parseDataSan(data, nameData, fwData, array)
+	if err != nil {
+		logError(err.Error())
+	} else {
+
+		for _, port := range ports.Ports {
+			updateSanPorts(port)
+		}
+	}
 }
 
 func collectDataStorage(array Array) {
@@ -289,6 +310,34 @@ func updateStorageClient() {
 	}
 }
 
+func updateSanPorts(port Port) {
+	{
+		portString := switchPortMetrics + ",Switch=" + port.Switch +
+			",port_index=" + port.Index +
+			" Site=\"" + port.Site +
+			"\",Room=\"" + port.Room +
+			"\",firmware=\"" + port.Version +
+			"\",port=\"" + port.Port +
+			"\",address=\"" + port.Address +
+			"\",media=\"" + port.Media +
+			"\",speed=\"" + port.Speed +
+			"\",state=\"" + port.State +
+			"\",proto=\"" + port.Proto +
+			"\",name=\"" + port.Name +
+			"\",fabric=\"" + port.Fabric +
+			"\" " + ts
+		resp, err := http.Post(url, "application/json; charset=utf-8", bytes.NewBuffer([]byte(portString)))
+		if err != nil {
+			log.Fatalln(err)
+		}
+		defer resp.Body.Close()
+		fmt.Println(portString)
+		var res map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&res)
+		fmt.Println(fmt.Sprint(resp.StatusCode))
+	}
+}
+
 func runCommand(connection *ssh.Client, command string) ([]byte, error) {
 	var output []byte
 	var err error
@@ -301,9 +350,45 @@ func runCommand(connection *ssh.Client, command string) ([]byte, error) {
 	return output, err
 
 }
-func parseDataSan(switchData, nameData, fwData []byte, device Switch) (output Port, err error) {
-	for _, line := range strings.Split(string(switchData), "\n") {
-		fmt.Println(string(line))
+func parseDataSan(switchData, nameData, fwData []byte, device Switch) (output Ports, err error) {
+	reg := regexp.MustCompile(`\s\s+`)
+	var data []string
+	if device.Fid == "0" {
+		data = strings.Split(string(switchData), "\n")[17:]
+	} else {
+		data = strings.Split(string(switchData), "\n")[21:]
+	}
+
+	for _, line := range data {
+		splitLine := reg.ReplaceAllString(strings.TrimSpace(line), ",")
+		portStats := strings.Split(splitLine, ",")
+		if len(portStats) > 1 {
+			var port Port
+			port.Switch = strings.TrimSpace(device.Name)
+			port.Site = strings.TrimSpace(device.Site)
+			port.Index = strings.TrimSpace(portStats[0])
+			port.Room = strings.TrimSpace(device.Room)
+			port.Port = strings.TrimSpace(portStats[1])
+			port.Address = strings.TrimSpace(portStats[2])
+			port.Media = strings.TrimSpace(portStats[3])
+			port.Speed = strings.TrimSpace(portStats[4])
+			port.State = strings.TrimSpace(portStats[5])
+			port.Fabric = strings.TrimSpace(device.Fabric)
+			port.Proto = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.Join(portStats[6:], " "), "[", ""), "]", ""), "'", ""), ",", ""))
+			for _, fwline := range strings.Split(string(fwData), "\n") {
+				if strings.Contains(fwline, "Fabric OS") {
+					port.Version = strings.TrimSpace(strings.Split(fwline, ":")[1])
+				}
+			}
+			for _, nline := range strings.Split(string(nameData), "\n") {
+				splitLine := reg.ReplaceAllString(strings.TrimSpace(nline), ",")
+				portNames := strings.Split(splitLine, ",")
+				if port.Index == portNames[0] {
+					port.Name = strings.TrimSpace(portNames[len(portNames)-1])
+				}
+			}
+			output.Ports = append(output.Ports, port)
+		}
 	}
 
 	return output, err
@@ -612,6 +697,8 @@ func connectToHostPW(user, password, host string) (*ssh.Client, error) {
 	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "diffie-hellman-group14-sha256")
 	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "diffie-hellman-group18-sha512")
 	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "curve25519-sha256@libssh.org")
+	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "diffie-hellman-group-exchange-sha1")
+	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "KexAlgorithms=diffie-hellman-group14-sha1")
 
 	client, err := ssh.Dial("tcp", host+":22", sshConfig)
 	if err != nil {
@@ -640,6 +727,8 @@ func connectToHostKB(user, password, host string) (*ssh.Client, error) {
 	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "diffie-hellman-group14-sha256")
 	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "diffie-hellman-group18-sha512")
 	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "curve25519-sha256@libssh.org")
+	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "diffie-hellman-group-exchange-sha1")
+	sshConfig.KeyExchanges = append(sshConfig.KeyExchanges, "KexAlgorithms=diffie-hellman-group14-sha1")
 
 	client, err := ssh.Dial("tcp", host+":22", sshConfig)
 	if err != nil {

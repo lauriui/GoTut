@@ -10,7 +10,7 @@ import (
 func san() {
 	fmt.Println("Collecting SAN data for:", client)
 	getSwitches("bdcsan.json")
-	fmt.Println(switches)
+	// fmt.Println(switches)
 
 	arraysLength := len(switches)
 	wg.Add(arraysLength)
@@ -88,10 +88,10 @@ var pools Pools
 var arrays []Array
 var switches []Switch
 var ts = fmt.Sprint(time.Now().UnixNano())
-var url = "http://10.75.8.28:8086/write?db=capacity_metrics"
 var wg sync.WaitGroup
 var client string
 var telia Client
+var switchPortMetrics = "switch_ports"
 
 func main() {
 	var option string

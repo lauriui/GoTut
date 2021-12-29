@@ -26,10 +26,12 @@ type Switches struct {
 }
 
 type Switch struct {
-	Name string `json:"name"`
-	Ip   string `json:"ip"`
-	Site string `json:"site"`
-	Room string `json:"room"`
+	Name   string `json:"name"`
+	Ip     string `json:"ip"`
+	Site   string `json:"site"`
+	Room   string `json:"room"`
+	Fid    string `json:"fid"`
+	Fabric string `json:"fabric"`
 }
 
 type Ports struct {
@@ -49,6 +51,7 @@ type Port struct {
 	State   string
 	Proto   string
 	Name    string
+	Fabric  string
 }
 
 type Pools struct {
